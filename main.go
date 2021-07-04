@@ -7,10 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	v1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer/json"
 	"k8s.io/client-go/kubernetes"
@@ -48,6 +50,13 @@ func extract(unknown interface{}) runtime.Object {
 		newP.RoleRef = v.RoleRef
 		newP.Subjects = v.Subjects
 		return newP.DeepCopyObject()
+	case rbacv1.Role:
+		newP := rbacv1.Role{}
+		newP.TypeMeta = v.TypeMeta
+		newP.ObjectMeta.Labels = v.ObjectMeta.Labels
+		newP.ObjectMeta.Name = v.ObjectMeta.Name
+		newP.ObjectMeta.Namespace = v.ObjectMeta.Namespace
+		return newP.DeepCopyObject()
 	}
 	return nil
 }
@@ -79,6 +88,19 @@ func toYaml(c runtime.Object, w io.Writer) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func isUserDefined(s string) bool {
+	return !strings.Contains(strings.ToUpper(s), "OPSH")
+}
+
+func containsUserDefined(subjects []rbacv1.Subject) bool {
+	for _, subject := range subjects {
+		if isUserDefined(subject.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 func main() {
@@ -126,8 +148,22 @@ func main() {
 		panic(err.Error())
 	}
 
-	for _, secret := range bindings.Items {
-		toYaml(extract(secret), os.Stdout)
+	userDefinedBindings := []rbacv1.RoleBinding{}
+	for _, binding := range bindings.Items {
+		subjects := binding.Subjects
+		if containsUserDefined(subjects) {
+			userDefinedBindings = append(userDefinedBindings, binding)
+		}
+	}
+
+	for _, binding := range userDefinedBindings {
+		opts := metav1.ListOptions{
+			FieldSelector: fields.OneTermEqualSelector("metadata.name", binding.RoleRef.Name).String(),
+		}
+		roles, _ := clientset.RbacV1().Roles(binding.ObjectMeta.Namespace).List(context.TODO(), opts)
+		for _, role := range roles.Items {
+			toYaml(extract(role), os.Stdout)
+		}
 
 	}
 
