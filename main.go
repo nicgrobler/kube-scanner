@@ -28,6 +28,8 @@ const (
 	defaultOutputDir      string = "default"
 )
 
+var outputDirectory string
+
 func extract(unknown interface{}) runtime.Object {
 
 	/*
@@ -117,9 +119,9 @@ func (f *fileWriter) flush(namespace, name, resourceType string) error {
 
 }
 
-func newFileWriter(rootPath string) *fileWriter {
+func newFileWriter() *fileWriter {
 	return &fileWriter{
-		rootDir: rootPath,
+		rootDir: outputDirectory,
 		buffer:  bytes.Buffer{},
 	}
 }
@@ -146,13 +148,15 @@ func addTypeInformationToObject(obj runtime.Object) error {
 	return nil
 }
 
-func toYaml(c runtime.Object, w *fileWriter) {
+func dumpToFile(c runtime.Object, namespace, name, resourceType string) {
+	w := newFileWriter()
 	addTypeInformationToObject(c)
 	s := json.NewYAMLSerializer(json.DefaultMetaFactory, scheme.Scheme, scheme.Scheme)
 	err := s.Encode(c, w)
 	if err != nil {
 		log.Fatal(err)
 	}
+	w.flush(namespace, name, resourceType)
 
 }
 
@@ -186,6 +190,8 @@ func main() {
 
 	flag.Parse()
 
+	outputDirectory = *outputDir
+
 	// use the current context in kubeconfig
 	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	if err != nil {
@@ -205,9 +211,7 @@ func main() {
 	}
 
 	for _, deployment := range deployments.Items {
-		w := newFileWriter(*outputDir)
-		toYaml(extract(deployment), w)
-		w.flush(deployment.ObjectMeta.Namespace, deployment.ObjectMeta.Name, "deployment")
+		dumpToFile(extract(deployment), deployment.ObjectMeta.Namespace, deployment.ObjectMeta.Name, "deployment")
 	}
 
 	/*
@@ -234,18 +238,15 @@ func main() {
 	}
 
 	for _, binding := range userDefinedBindings {
-		w := newFileWriter(*outputDir)
-		toYaml(extract(binding), w)
-		w.flush(binding.ObjectMeta.Namespace, binding.ObjectMeta.Name, "binding")
+
+		dumpToFile(extract(binding), binding.ObjectMeta.Namespace, binding.ObjectMeta.Name, "binding")
+
 		opts := metav1.ListOptions{
 			FieldSelector: fields.OneTermEqualSelector("metadata.name", binding.RoleRef.Name).String(),
 		}
 		roles, _ := clientset.RbacV1().Roles(binding.ObjectMeta.Namespace).List(context.TODO(), opts)
 		for _, role := range roles.Items {
-			w := newFileWriter(*outputDir)
-			toYaml(extract(role), w)
-			w.flush(role.ObjectMeta.Namespace, role.ObjectMeta.Name, "role")
-
+			dumpToFile(extract(role), role.ObjectMeta.Namespace, role.ObjectMeta.Name, "role")
 		}
 
 	}
@@ -266,16 +267,15 @@ func main() {
 	}
 
 	for _, binding := range userDefinedClusterBindings {
-		w := newFileWriter(*outputDir)
-		toYaml(extract(binding), w)
-		w.flush(binding.ObjectMeta.Namespace, binding.ObjectMeta.Name, "clusterbinding")
+
+		dumpToFile(extract(binding), binding.ObjectMeta.Namespace, binding.ObjectMeta.Name, "clusterbinding")
+
 		role, err := clientset.RbacV1().ClusterRoles().Get(context.TODO(), binding.RoleRef.Name, metav1.GetOptions{})
 		if err != nil {
 			log.Fatal(err)
 		}
-		w = newFileWriter(*outputDir)
-		toYaml(extract(role), w)
-		w.flush(role.ObjectMeta.Namespace, role.ObjectMeta.Name, "clusterrole")
+
+		dumpToFile(extract(role), role.ObjectMeta.Namespace, role.ObjectMeta.Name, "clusterrole")
 
 	}
 
